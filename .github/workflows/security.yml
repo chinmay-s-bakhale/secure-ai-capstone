@@ -1,0 +1,71 @@
+name: AI Security Gates
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# The 4 gates are independent jobs so that ALL of them report on every push
+# (a `needs:` chain would skip later gates as soon as one failed). The final
+# job needs all four, so the commit is only "deployable" if every gate is green.
+jobs:
+  gate-1-bandit:
+    name: "Gate 1 - Bandit SAST"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Bandit
+        run: pip install bandit
+      - name: Informational report (Medium and above)
+        run: bandit -r . -x ./.git,./.github -ll || true
+      - name: Gate - fail on any HIGH severity finding
+        run: bandit -r . -x ./.git,./.github -lll
+
+  gate-2-safety:
+    name: "Gate 2 - Safety dependency scan"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Safety
+        run: pip install safety
+      - name: Gate - fail on known vulnerable dependencies
+        run: safety check -r requirements_pinned.txt
+
+  gate-3-gitleaks:
+    name: "Gate 3 - Gitleaks secret detection"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks scan of pushed commits
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  gate-4-inject-scanner:
+    name: "Gate 4 - Custom prompt injection scanner"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run inject_scanner.py
+        run: python inject_scanner.py
+
+  all-gates-passed:
+    name: "All 4 gates passed - deployable"
+    needs: [gate-1-bandit, gate-2-safety, gate-3-gitleaks, gate-4-inject-scanner]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Bandit, Safety, Gitleaks and the injection scanner all passed."
